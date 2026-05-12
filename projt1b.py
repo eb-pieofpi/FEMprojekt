@@ -9,6 +9,9 @@ import calfem.vis_mpl as cfv
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+
+import plantml
 
 mpl.use('TkAgg')
 
@@ -37,10 +40,14 @@ v = 0.3 #Poisson
 alpha = 8e-6 #thermal expansion coeff
 rho = 1500 #Density
 
+t_tot = 10*60 # Total simulation time in seconds
+n_steps = 1000 # Number of time steps in the simulation
+
 c_p = 800 #Specific heat
 k = 2 #Thermal conductivity
 
 thickness = 1 # meter 
+
 
 
 def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
@@ -184,20 +191,8 @@ if __name__=="__main__":
     nelem = len(edof)
     ep = [thickness]
 
-    #Stiffness matrix 
-    K =  np.zeros((ndof,ndof))
-
     #Conductivity matrix
     D = np.eye(2)*k
-
-    # Total Load vector
-    F_l = np.zeros((ndof, 1))
-
-    # Flow out vector
-    F_out = np.zeros((ndof, 1))
-
-    # Convection contribution to load vector
-    F_convection = np.zeros((ndof, 1))
 
     edges = nodesToEdges(bdofs, edof)
 
@@ -205,12 +200,24 @@ if __name__=="__main__":
 
     edges_convection = edges[MARKER_CONVECTION]
 
-    # Calculate flow contribution to load vector
-    for edge in edges_out:
-        length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
-        F_out[edge-1] -= q_out * length * thickness / 2 #Form function for flow out, negative since it's leaving the system, divided by 2 since it is a triangle and we have linear shape functions for the edges
+    # Convection contribution to load vector
+    F_convection = np.zeros((ndof, 1))
 
+    #Create C matrix (does not change with time)
+    C = np.zeros((ndof, ndof))
 
+    #Stiffness matrix 
+    K =  np.zeros((ndof,ndof))
+
+    for i in range(nelem):
+        #Assemble C matrix
+        Ce = plantml.plantml(ex[i,:], ey[i,:], rho*c_p*thickness)
+        cfc.assem(edof[i], C, Ce)
+
+        #Assemble K matrix
+        Ke = cfc.flw2te(ex[i,:],ey[i,:],ep,D)
+        cfc.assem(edof[i], K, Ke)
+        
     for edge in edges_convection:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         F_convection[edge-1] += alpha_c * thickness * length * T_inf / 2 #
@@ -221,37 +228,109 @@ if __name__=="__main__":
         # Put into the global stiffness matrix
         cfc.assem(edge, K, Kc_e)
 
-    for i in range(nelem):
-        Ke = cfc.flw2te(ex[i,:],ey[i,:],ep,D)
+    # Create time array
 
-        # Calculate area, using vector product of vectors and dividing by 2
-        x = ex[i, :]
-        y = ey[i, :]
+    t = np.linspace(0, t_tot, n_steps) # Simulate for 10 minutes with 1000 time steps
 
-        A = 0.5 * np.abs( (x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]))
+    delta_t = t[1] - t[0]
 
-        F_l_e = (Q*A*thickness/3)* np.array([[1],
-                                             [1],
-                                             [1]])
+    # Initial temperature distribution
+    T_n = np.ones((ndof, 1)) * T_inf
+
+    # Create the history of all times
+    T_history = np.zeros((ndof, n_steps))
+    T_history[:, 0] = T_n.flatten()
+
+    #Iterate over time steps. Recalculating the load vector
+
+    for step in range(1, n_steps):
+        time = t[step]
+
+        # Total Load vector
+        F_l = np.zeros((ndof, 1))
+
+        # Flow out vector
+        F_out = np.zeros((ndof, 1))
+
+        # Note the load vector should be in time step n+1! 
+
+        # Calculate flow contribution to load vector
+        for edge in edges_out:
+            length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
+            F_out[edge-1] -= q_out * np.sin(np.pi*(time)/t_tot)* length * thickness / 2 #Form function for flow out, negative since it's leaving the system, divided by 2 since it is a triangle and we have linear shape functions for the edges
         
-        cfc.assem(edof[i], K, Ke, F_l, F_l_e)
+        for i in range(nelem):
+            
+            # Calculate area, using vector product of vectors and dividing by 2
+            x = ex[i, :]
+            y = ey[i, :]
 
-    F_l += F_out + F_convection #Add flow contribution and convection to load vector
+            A = 0.5 * np.abs( (x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]))
+
+            F_l_e = (Q*np.sin(np.pi*(time)/t_tot)*A*thickness/3)* np.array([[1],
+                                                [1],
+                                                [1]])
+            
+
+            # To be able to use assem for load vector
+            Ke_fake = np.zeros((3, 3))
+            cfc.assem(edof[i], K, Ke_fake, F_l, F_l_e)
+
+        F_l += F_out + F_convection #Add flow contribution and convection to load vector
+
+        T_n = np.linalg.solve(C + delta_t*K, np.matmul(C, T_n) + delta_t*F_l) # Solve for new temperatures
+        T_history[:, step] = T_n.flatten()
+
+
+    # Convert to celsius for plotting
+    T_celsius = T_history - 273.15
+
+    # Max temp and convert to celcius
+    max_temps = np.max(T_celsius, axis=0)
     
-    temps, flows = cfc.solveq(K, F_l, bc, bc_value)
-
-    cfv.figure()
-
-    cfv.draw_nodal_values_shaded(temps, coord, edof, dofs_per_node=1, el_type=2, title="Temperature distribution in the plate")
-    cfv.colorbar(label="Temp (K)")
-    plt.axis('equal')
-    plt.xlabel("x (m)")
-    plt.ylabel("y (m)")
-
-    plt.savefig("temperature_distribution_a.png") 
+    plt.figure(figsize=(10, 5))
+    plt.plot(t, max_temps, label="Maximum temperature in the battery", color='red')
+    plt.xlabel("Time [s]")
+    plt.ylabel("Temperature [°C]")
+    plt.title("Maximum temperature in the battery over time")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig("max_temperature_over_time.png")
     plt.show()
 
+    times_to_plot = [60, 180, 300, 420, 510, 600]
 
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    axes = axes.flatten() 
 
+    for i, target_time in enumerate(times_to_plot):
+        
+        step = int(target_time / delta_t)
+        if step >= n_steps:
+            step = n_steps - 1
 
+    
+        plt.sca(axes[i])
 
+        # Draw
+        cfv.draw_nodal_values_shaded(
+            T_celsius[:, step],
+            coord,
+            edof,
+            dofs_per_node=dofs_pn,
+            el_type=el_type,
+            title=f"Temperature distribution at time = {target_time} s"
+        )
+
+        # Colors
+        cfv.colorbar(label="Temp (°C)") 
+        
+        axes[i].axis('equal') 
+        axes[i].set_xlabel("x (m)")
+        axes[i].set_ylabel("y (m)")
+
+        axes[i].ticklabel_format(useOffset=False, style='plain')
+
+    plt.tight_layout()
+    plt.savefig("temperature_distribution_over_time.png")
+    plt.show()
