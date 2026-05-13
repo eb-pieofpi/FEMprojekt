@@ -9,6 +9,7 @@ def plantml(ex: np.array, ey: np.array, s: float):
     ex: element x-coordinates
     ey: element y-coordinates
     s: constant scalar, e.g. density*thickness
+ 
 
     Outputs:
     Me: integrated element matrix
