@@ -20,13 +20,14 @@ import calfem.vis_mpl as cfv
 import numpy as np
 
 # Mesh data
-el_sizef, el_type, dofs_pn = 0.02, 2, 1
+el_sizef, el_type, dofs_pn = 0.02, 2, 2
 mesh_dir = "."
 
 # boundary markers
 MARKER_SYMMETRY=0
 MARKER_CONVECTION=1
-MARKER_q_out = 2
+MARKER_p2 = 2
+MARKER_p1 = 3
 
 #Variables
 
@@ -137,8 +138,8 @@ def generate_mesh(show_geometry: bool):
     g.circle([74, 70, 71], 74, marker=MARKER_CONVECTION) #1 bottom right quarter
 
     # Lines 
-    g.spline([1, 2], 1, marker=MARKER_q_out) 
-    g.spline([2, 3], 2, marker=MARKER_SYMMETRY)
+    g.spline([1, 2], 1, marker=MARKER_p2) 
+    g.spline([2, 3], 2, marker=MARKER_p1)
     g.spline([3, 4], 3, marker=MARKER_CONVECTION)
     g.spline([4, 1], 4, marker=MARKER_SYMMETRY)
 
@@ -184,7 +185,7 @@ def generate_mesh(show_geometry: bool):
     return (coord, edof, dofs, bdofs, bc, bc_value, element_markers)
 
 if __name__=="__main__":
-    coord, edof, dofs, bdofs, bc, bc_value, element_markers = generate_mesh(show_geometry=False)
+    coord, edof, dofs, bdofs, bc, bc_value, element_markers = generate_mesh(show_geometry=True)
 
     ex,ey = cfc.coord_extract(edof,coord,dofs)
     ndof = np.size(dofs)
@@ -196,15 +197,11 @@ if __name__=="__main__":
 
     edges = nodesToEdges(bdofs, edof)
 
-    edges_out = edges[MARKER_q_out]
+    edges_out = edges[MARKER_p2]
 
     edges_convection = edges[MARKER_CONVECTION]
 
-    # Convection contribution to load vector
-    F_convection = np.zeros((ndof, 1))
 
-    #Create C matrix (does not change with time)
-    C = np.zeros((ndof, ndof))
 
     #Stiffness matrix 
     K =  np.zeros((ndof,ndof))
@@ -228,109 +225,5 @@ if __name__=="__main__":
         # Put into the global stiffness matrix
         cfc.assem(edge, K, Kc_e)
 
-    # Create time array
-
-    t = np.linspace(0, t_tot, n_steps) # Simulate for 10 minutes with 1000 time steps
-
-    delta_t = t[1] - t[0]
-
-    # Initial temperature distribution
-    T_n = np.ones((ndof, 1)) * T_inf
-
-    # Create the history of all times
-    T_history = np.zeros((ndof, n_steps))
-    T_history[:, 0] = T_n.flatten()
-
-    #Iterate over time steps. Recalculating the load vector
-
-    for step in range(1, n_steps):
-        time = t[step]
-
-        # Total Load vector
-        F_l = np.zeros((ndof, 1))
-
-        # Flow out vector
-        F_out = np.zeros((ndof, 1))
-
-        # Note the load vector should be in time step n+1! 
-
-        # Calculate flow contribution to load vector
-        for edge in edges_out:
-            length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
-            F_out[edge-1] -= q_out * np.sin(np.pi*(time)/t_tot)* length * thickness / 2 #Form function for flow out, negative since it's leaving the system, divided by 2 since it is a triangle and we have linear shape functions for the edges
-        
-        for i in range(nelem):
-            
-            # Calculate area, using vector product of vectors and dividing by 2
-            x = ex[i, :]
-            y = ey[i, :]
-
-            A = 0.5 * np.abs( (x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]))
-
-            F_l_e = (Q*np.sin(np.pi*(time)/t_tot)*A*thickness/3)* np.array([[1],
-                                                [1],
-                                                [1]])
-            
-
-            # To be able to use assem for load vector
-            Ke_fake = np.zeros((3, 3))
-            cfc.assem(edof[i], K, Ke_fake, F_l, F_l_e)
-
-        F_l += F_out + F_convection #Add flow contribution and convection to load vector
-
-        T_n = np.linalg.solve(C + delta_t*K, np.matmul(C, T_n) + delta_t*F_l) # Solve for new temperatures
-        T_history[:, step] = T_n.flatten()
-
-
-    # Convert to celsius for plotting
-    T_celsius = T_history - 273.15
-
-    # Max temp and convert to celcius
-    max_temps = np.max(T_celsius, axis=0)
     
-    plt.figure(figsize=(10, 5))
-    plt.plot(t, max_temps, label="Maximum temperature in the battery", color='red')
-    plt.xlabel("Time [s]")
-    plt.ylabel("Temperature [°C]")
-    plt.title("Maximum temperature in the battery over time")
-    plt.grid(True)
-    plt.legend()
-    plt.savefig("max_temperature_over_time.png")
-    plt.show()
-
-    times_to_plot = [60, 180, 300, 420, 510, 600]
-
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-    axes = axes.flatten() 
-
-    for i, target_time in enumerate(times_to_plot):
-        
-        step = int(target_time / delta_t)
-        if step >= n_steps:
-            step = n_steps - 1
-
-    
-        plt.sca(axes[i])
-
-        # Draw
-        cfv.draw_nodal_values_shaded(
-            T_celsius[:, step],
-            coord,
-            edof,
-            dofs_per_node=dofs_pn,
-            el_type=el_type,
-            title=f"Temperature distribution at time = {target_time} s"
-        )
-
-        # Colors
-        cfv.colorbar(label="Temp (°C)") 
-        
-        axes[i].axis('equal') 
-        axes[i].set_xlabel("x (m)")
-        axes[i].set_ylabel("y (m)")
-
-        axes[i].ticklabel_format(useOffset=False, style='plain')
-
-    plt.tight_layout()
-    plt.savefig("temperature_distribution_over_time.png")
-    plt.show()
+   
