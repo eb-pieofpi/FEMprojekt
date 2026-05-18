@@ -215,7 +215,7 @@ if __name__=="__main__":
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         F_convection[edge-1] += alpha_c * thickness * length * T_inf / 2 #
 
-        # Beräkna konvektionsstyvhetsmatrisen för kanten
+        # Calculate convection contribution to stiffness matrix
         Kc_e = (alpha_c * thickness * length / 6.0) * np.array([[2.0, 1.0],[1.0, 2.0]])
 
         # Put into the global stiffness matrix

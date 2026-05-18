@@ -19,6 +19,8 @@ import calfem.vis_mpl as cfv
 
 import numpy as np
 
+import proj_temp_results_as_functions as temp_results
+
 # Mesh data
 el_sizef, el_type, dofs_pn = 0.02, 2, 2
 mesh_dir = "."
@@ -28,6 +30,7 @@ MARKER_SYMMETRY=0
 MARKER_CONVECTION=1
 MARKER_p2 = 2
 MARKER_p1 = 3
+MARKER_NADA = 4
 
 #Variables
 
@@ -49,6 +52,9 @@ k = 2 #Thermal conductivity
 
 thickness = 1 # meter 
 
+p0 = 1e8 # pressure for p1
+p2 = 1e7 # Pressure
+pc = 1e6 # Contact pressure
 
 
 def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
@@ -71,6 +77,33 @@ def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
                 edges [ key ]. append ( I )
             
     return edges
+
+def elmToNode ( eV : np . array , edof : np . array ) -> np . array :
+    """ Estimates nodal values from element - based values
+    Args :
+    eV ( np . array ) : element values
+    edof ( np . array ) : element connectivity matrix
+    Returns :
+    np . array : nodal - based values
+     """
+
+    nnod : int = np . max ( edof )
+    ne : int = 0
+    nV = np . zeros (( nnod ,) )
+    # Loop over nodes
+    for n in range (0 , nnod ) :
+        ne = 0
+        # Check which elements contain the node
+        for e , eldof in enumerate ( edof ) :
+        # If e contains the node add the elemental value
+            if (( n +1) in eldof ) :
+                ne += 1
+                nV [ n ] += eV [ e ]
+            # Divide by total number of elements
+        nV [ n ] /= ne
+
+    return nV
+
 
 def generate_mesh(show_geometry: bool):
     # initialize mesh
@@ -140,7 +173,7 @@ def generate_mesh(show_geometry: bool):
     # Lines 
     g.spline([1, 2], 1, marker=MARKER_p2) 
     g.spline([2, 3], 2, marker=MARKER_p1)
-    g.spline([3, 4], 3, marker=MARKER_CONVECTION)
+    g.spline([3, 4], 3, marker=MARKER_NADA)
     g.spline([4, 1], 4, marker=MARKER_SYMMETRY)
 
     # define surface
@@ -178,6 +211,12 @@ def generate_mesh(show_geometry: bool):
     # Boundary Conditions
     bc, bc_value = np.array([], 'i'), np.array([], 'f')
 
+    for dof in bdofs[MARKER_SYMMETRY]:
+        
+        bc = np.append(bc, dof)
+        bc_value = np.append(bc_value, 0.0)
+
+   
     # bc, bc_value = cfu.applybc(bdofs, bc, bc_value, MARKER_CONVECTION, T_inf)
 
 
@@ -185,45 +224,181 @@ def generate_mesh(show_geometry: bool):
     return (coord, edof, dofs, bdofs, bc, bc_value, element_markers)
 
 if __name__=="__main__":
-    coord, edof, dofs, bdofs, bc, bc_value, element_markers = generate_mesh(show_geometry=True)
+    coord, edof, dofs, bdofs, bc, bc_value, element_markers = generate_mesh(show_geometry=False)
 
     ex,ey = cfc.coord_extract(edof,coord,dofs)
     ndof = np.size(dofs)
     nelem = len(edof)
-    ep = [thickness]
+    
+    # Constitutive matrix
+    ptype = 2
+    D = cfc.hooke(ptype, E, v)
 
-    #Conductivity matrix
-    D = np.eye(2)*k
 
-    edges = nodesToEdges(bdofs, edof)
+    # We cant use bdofs and edof anymore since we need nodes and we have two dofs per node.
+    enod = (edof[:, 0::2] + 1) // 2
+    bnodes = {}
+    for key, dof_list in bdofs.items():
+        bnodes[key] = np.unique((np.array(dof_list) + 1) // 2)
 
-    edges_out = edges[MARKER_p2]
+    # List of edges for each boundary condition
+
+    edges = nodesToEdges(bnodes, enod) #total edges on boundary
+
+    edges_p2 = edges[MARKER_p2]
 
     edges_convection = edges[MARKER_CONVECTION]
 
-
+    edges_p1 = edges[MARKER_p1]
 
     #Stiffness matrix 
     K =  np.zeros((ndof,ndof))
+    ep = [ptype, thickness]
+
+    F_therm = np.zeros((ndof,1))
+
+    T_stat = temp_results.get_T_static()
 
     for i in range(nelem):
-        #Assemble C matrix
-        Ce = plantml.plantml(ex[i,:], ey[i,:], rho*c_p*thickness)
-        cfc.assem(edof[i], C, Ce)
-
         #Assemble K matrix
-        Ke = cfc.flw2te(ex[i,:],ey[i,:],ep,D)
+        Ke = cfc.plante(ex[i,:],ey[i,:],ep,D)
         cfc.assem(edof[i], K, Ke)
+
+        #Thermal force vector
+        nod_index = enod[i] - 1
         
+        T_element = T_stat[nod_index] 
+        T_avg = np.mean(T_element)
+        delta_T = T_avg - T_inf  
+        
+        # Eftersom vi bygger B-matrisen i 2D måste vi baka in Poissons tal (1+v)
+        # för att simulera att z-riktningen är fastlåst (Plan töjning).
+        eps_0 = (1 + v) * alpha * delta_T * np.array([1, 1, 0])
+        
+        # FIXEN: Tvätta bort CALFEMs gamla "np.matrix"-format!
+        D_clean = np.array(D)
+        
+        # Klipp ut 3x3 från den RENA matrisen
+        idx = [0, 1, 3]
+        D_2D = D_clean[np.ix_(idx, idx)]
+        
+        # Nu blir detta en perfekt 1D-vektor med 3 element
+        sigma_0 = D_2D @ eps_0
+        
+        # --- HÄR BÖRJAR B-MATRISEN (Detta är vad plantf försöker göra) ---
+        x1, x2, x3 = ex[i, 0], ex[i, 1], ex[i, 2]
+        y1, y2, y3 = ey[i, 0], ey[i, 1], ey[i, 2]
+
+        # Arean (A)
+        A = 0.5 * abs(x1*(y2 - y3) + x2*(y3 - y1) + x3*(y1 - y2))
+
+        # Geometriska konstanter
+        b1, b2, b3 = y2 - y3, y3 - y1, y1 - y2
+        c1, c2, c3 = x3 - x2, x1 - x3, x2 - x1
+
+        # B-matrisen (Strain-Displacement matrix)
+        B = (1.0 / (2.0 * A)) * np.array([
+            [b1,  0, b2,  0, b3,  0],
+            [ 0, c1,  0, c2,  0, c3],
+            [c1, b1, c2, b2, c3, b3]
+        ])
+
+        # Nodkrafterna! f = A * t * B^T * sigma_0 (Använder @ för korrekt matris-matte)
+        f_therm_e = A * thickness * (B.T @ sigma_0)
+        
+        # Montera in krafterna i totala lastvektorn!
+        indx = edof[i] - 1
+        F_therm[indx, 0] += f_therm_e
+
+
+    # Total f vector
+    F = np.zeros((ndof,1))
+
+    #Boundary  vector
+    F_b = np.zeros((ndof,1))
+
+    for edge in edges_p2:
+        length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
+
+        nod1 = edge[0]
+        nod2 = edge[1]
+
+        y1_index = 2*nod1 - 1
+        y2_index = 2*nod2 - 1
+
+        F_b[[y1_index, y2_index]] += p2 * thickness * length / 2 # Pressure times area (length*thickness) divided by 2 because of linear shape functions
+
+
+    p1 = lambda y: (y/0.023-1)*p0
+    for edge in edges_p1:
+        length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
+        
+        # y coordinates to be able to calculate the pressure at the edge
+        y1 = coord[edge[0]-1][1]
+        y2 = coord[edge[1]-1][1]
+
+        p_1 = p1(y1)
+        p_2 = p1(y2)
+
+        F_1 = length*thickness*(2*p_1 + p_2)/6 # Pressure times area (length*thickness) times the shape function contribution for a linear edge
+        F_2 = length*thickness*(p_1 + 2*p_2)/6
+
+        # Find degree of freedom for the x direction for the two nodes of the edge
+        nod1 = edge[0]
+        nod2 = edge[1]
+
+        x1_index = 2*nod1 - 2
+        x2_index = 2*nod2 - 2
+
+        F_b[x1_index] += F_1
+        F_b[x2_index] += F_2
+    
     for edge in edges_convection:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
-        F_convection[edge-1] += alpha_c * thickness * length * T_inf / 2 #
+        vector = coord[edge[1]-1] - coord[edge[0]-1]
 
-        # Beräkna konvektionsstyvhetsmatrisen för kanten
-        Kc_e = (alpha_c * thickness * length / 6.0) * np.array([[2.0, 1.0],[1.0, 2.0]])
+        #Rotation 90 degrees clockwise and normalization to get the normal vector pointing outwards
+        normal_vector = np.array([vector[1], -vector[0]]) / np.linalg.norm(vector) 
 
-        # Put into the global stiffness matrix
-        cfc.assem(edge, K, Kc_e)
+        force_vec = -thickness*length*pc * normal_vector / 2
+        F_1 = force_vec[0]
+        F_2 = force_vec[1]
+
+        xindex = 2*edge - 2
+        yindex = 2*edge - 1
+        F_b[xindex] += F_1
+        F_b[yindex] += F_2
+
+    F = F_b + F_therm
+
+    displacements, reactions = cfc.solveq(K, F, bc, bc_value)
+
+    
+    # ==========================================
+    # PLOTTA FÖRSKJUTNINGAR
+    # ==========================================
+    
+    # Skalfaktor: Gör förskjutningen 100 ggr större så vi ser den tydligt
+    mag_factor = 100.0 
+
+    plt.figure(figsize=(8, 10))
+    
+    # Rita först det o-deformerade nätet svagt i bakgrunden (grått)
+    cfv.draw_mesh(
+        coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type, 
+        filled=False, color='lightgray'
+    )
+    
+    # Rita den deformerade geometrin i rött
+    cfv.draw_displacements(
+        a=displacements, coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type,
+        draw_undisplaced_mesh=False, title=f"Deformerad geometri (Skalfaktor: {mag_factor}x)",
+        color='red', magnfac=mag_factor
+    )
+    
+    plt.axis('equal') # Superviktigt för mekanik!
+    plt.show()
+
 
     
    
