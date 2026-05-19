@@ -521,5 +521,5 @@ def get_T_dynamic():
 
 
 
-    return T_history
+    return T_history, t
 

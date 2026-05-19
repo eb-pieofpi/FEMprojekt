@@ -22,7 +22,7 @@ import numpy as np
 import proj_temp_results_as_functions as temp_results
 
 # Mesh data
-el_sizef, el_type, dofs_pn = 0.02, 2, 2
+el_sizef, el_type, dofs_pn = 0.01, 2, 2
 mesh_dir = "."
 
 # boundary markers
@@ -275,57 +275,13 @@ if __name__=="__main__":
     edges_convection = edges[MARKER_CONVECTION]
 
     edges_p1 = edges[MARKER_p1]
-
-    #Stiffness matrix 
-    K =  np.zeros((ndof,ndof))
     ep = [ptype, thickness]
 
-    F_therm = np.zeros((ndof,1))
+
 
     T_tot, times = temp_results.get_T_dynamic()
-    T_stat = T_tot[:,700]
-    #T_stat = temp_results.get_T_static()
-
-    for i in range(nelem):
-        #Assemble K matrix
-        Ke = cfc.plante(ex[i,:],ey[i,:],ep,D)
-        cfc.assem(edof[i], K, Ke)
-
-        #Thermal force vector
-        nod_index = enod[i] - 1
-        
-        T_element = T_stat[nod_index] 
-        T_avg = np.mean(T_element)
-        delta_T = T_avg - T_inf  
-        
-        # Eftersom vi bygger B-matrisen i 2D måste vi baka in Poissons tal (1+v)
-        # för att simulera att z-riktningen är fastlåst (Plan töjning).
-        eps_0 = (1 + v) * alpha * delta_T * np.array([1, 1, 0])
-        
-        # FIXEN: Tvätta bort CALFEMs gamla "np.matrix"-format!
-        D_clean = np.array(D)
-        
-        # Klipp ut 3x3 från den RENA matrisen
-        idx = [0, 1, 3]
-        D_2D = D_clean[np.ix_(idx, idx)]
-        
-        # Nu blir detta en perfekt 1D-vektor med 3 element
-        sigma_0 = D_2D @ eps_0
-
-        B, A = Bfunction(ex[i,:], ey[i,:])
-
-        # Nodkrafterna! f = A * t * B^T * sigma_0 (Använder @ för korrekt matris-matte)
-        f_therm_e = A * thickness * (B.T @ sigma_0)
-        
-        # Montera in krafterna i totala lastvektorn!
-        indx = edof[i] - 1
-        F_therm[indx, 0] += f_therm_e
-
-
-    # Total f vector
-    F = np.zeros((ndof,1))
-
-    #Boundary  vector
+    
+            #Boundary  vector
     F_b = np.zeros((ndof,1))
 
     for edge in edges_p2:
@@ -380,80 +336,119 @@ if __name__=="__main__":
         F_b[xindex] += F_1
         F_b[yindex] += F_2
 
-    F = F_b + F_therm
-
-    displacements, reactions = cfc.solveq(K, F, bc, bc_value)
-
-    mises_elements = np.zeros(nelem)
-
+    #Stiffness matrix 
+    K =  np.zeros((ndof,ndof))
+    
     for i in range(nelem):
-        nod_index = enod[i] - 1
-        T_element = T_stat[nod_index] 
-        T_avg = np.mean(T_element)
-        delta_T = T_avg - T_inf  
+            #Assemble K matrix
+            Ke = cfc.plante(ex[i,:],ey[i,:],ep,D)
+            cfc.assem(edof[i], K, Ke)
+
+    time_subset = times[::100] # Ta var 10:e tid för att minska antalet plottade punkter
+
+    max_mises = np.zeros(len(time_subset))
+
+    for j in range(0, len(times), 100):
+
+        F_therm = np.zeros((ndof,1))
+
+        print(f"Calculating for time step {j+1}/{len(T_tot)}")
+
+        T_stat = T_tot[:,j]
+        for i in range(nelem):
+
+            #Thermal force vector
+            nod_index = enod[i] - 1
+            
+            T_element = T_stat[nod_index] 
+            T_avg = np.mean(T_element)
+            delta_T = T_avg - T_inf  
+            
+            # Eftersom vi bygger B-matrisen i 2D måste vi baka in Poissons tal (1+v)
+            # för att simulera att z-riktningen är fastlåst (Plan töjning).
+            eps_0 = (1 + v) * alpha * delta_T * np.array([1, 1, 0])
+            
+            # FIXEN: Tvätta bort CALFEMs gamla "np.matrix"-format!
+            D_clean = np.array(D)
+            
+            # Klipp ut 3x3 från den RENA matrisen
+            idx = [0, 1, 3]
+            D_2D = D_clean[np.ix_(idx, idx)]
+            
+            # Nu blir detta en perfekt 1D-vektor med 3 element
+            sigma_0 = D_2D @ eps_0
+
+            B, A = Bfunction(ex[i,:], ey[i,:])
+
+            # Nodkrafterna! f = A * t * B^T * sigma_0 (Använder @ för korrekt matris-matte)
+            f_therm_e = A * thickness * (B.T @ sigma_0)
+            
+            # Montera in krafterna i totala lastvektorn!
+            indx = edof[i] - 1
+            F_therm[indx, 0] += f_therm_e
+
+
+        # Total f vector
+        F = np.zeros((ndof,1))
+
+        F = F_b + F_therm
+
+        displacements, reactions = cfc.solveq(K, F, bc, bc_value)
+
+        mises_elements = np.zeros(nelem)
+
+
+        for i in range(nelem):
+            nod_index = enod[i] - 1
+            T_element = T_stat[nod_index] 
+            T_avg = np.mean(T_element)
+            delta_T = T_avg - T_inf  
+            
+            displacements_element = displacements[edof[i]-1]
+            B,A = Bfunction(ex[i,:], ey[i,:])
+
+            epsilon_almost_fucking_tot = np.matmul(B, displacements_element).flatten()
+            epsilon_fucking_tot = np.array([epsilon_almost_fucking_tot[0], epsilon_almost_fucking_tot[1], 0, epsilon_almost_fucking_tot[2]])
+
+            epsilon_elastic = epsilon_fucking_tot - alpha * delta_T * np.array([1, 1, 1, 0])
+
+            sigma_e = D @ epsilon_elastic
+
+            mises_elements[i] = vonMisesStress(sigma_e.flatten())
+
+        nodal_mises = elmToNode(mises_elements, enod)
+
+        nodal_mises_MPa = nodal_mises / 1e6
+
+        max_mises[j//100] = max(nodal_mises_MPa)
+
+
+        # plt.figure(figsize=(8, 10))
         
-        displacements_element = displacements[edof[i]-1]
-        B,A = Bfunction(ex[i,:], ey[i,:])
 
-        epsilon_almost_fucking_tot = np.matmul(B, displacements_element).flatten()
-        epsilon_fucking_tot = np.array([epsilon_almost_fucking_tot[0], epsilon_almost_fucking_tot[1], 0, epsilon_almost_fucking_tot[2]])
+        # cfv.draw_nodal_values_shaded(
+        #     nodal_mises_MPa, 
+        #     coords=coord, 
+        #     edof=enod, 
+        #     dofs_per_node=1, 
+        #     el_type=el_type, 
+        #     title="von Mises stress [MPa] for static temperature distribution"
 
-        epsilon_elastic = epsilon_fucking_tot - alpha * delta_T * np.array([1, 1, 1, 0])
+        # )
+        
+        # cfv.colorbar(label="Nodal von Mises stress (MPa)") 
+        
 
-        sigma_e = D @ epsilon_elastic
+        # plt.axis('equal')
+        # #plt.savefig("static_von_mises_stress_distribution.png")
+        # plt.show()
 
-        mises_elements[i] = vonMisesStress(sigma_e.flatten())
-
-    nodal_mises = elmToNode(mises_elements, enod)
-
-    nodal_mises_MPa = nodal_mises / 1e6
-
-    plt.figure(figsize=(8, 10))
-    
-    cfv.draw_nodal_values_shaded(
-        nodal_mises_MPa, 
-        coords=coord, 
-        edof=enod, 
-        dofs_per_node=1, 
-        el_type=el_type, 
-        title="Von Mises stress [MPa] for dynamic temperature distribution at time 420s"
-    )
-
-    cfv.colorbar(label="Nodal von Mises stress (MPa)") 
-    
-    plt.axis('equal')
-    #plt.savefig("dynamic_von_mises_stress_distribution.png")
+    plt.plot(time_subset, max_mises)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Max von Mises stress (MPa)")
+    plt.title("Max von Mises stress vs time")
+    plt.grid()
+    plt.savefig("max_von_mises_vs_time2.png")
     plt.show()
+        
 
-    print(max(nodal_mises_MPa))
-
-    # ==========================================
-    # PLOTTA FÖRSKJUTNINGAR
-    # ==========================================
-    
-    # Skalfaktor: Gör förskjutningen 100 ggr större så vi ser den tydligt
-    mag_factor = 100.0 
-
-    plt.figure(figsize=(8, 10))
-    
-    # Rita först det o-deformerade nätet svagt i bakgrunden (grått)
-    cfv.draw_mesh(
-        coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type, 
-        filled=False, color='lightgray'
-    )
-    
-    # Rita den deformerade geometrin i rött
-    cfv.draw_displacements(
-        a=displacements, coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type,
-        draw_undisplaced_mesh=False, title=f"Displacements static temperature (scaling factor: {mag_factor}x)",
-        color='red', magnfac=mag_factor
-    )
-    
-    plt.axis('equal')
-
-    #plt.savefig("static_displacement_magnified.png")
-    plt.show()
-
-
-    
-   
