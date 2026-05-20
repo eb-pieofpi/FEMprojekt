@@ -369,12 +369,38 @@ if __name__=="__main__":
         F_b[x1_index] += F_1
         F_b[x2_index] += F_2
     
+    plot_mid_x = []
+    plot_mid_y = []
+    plot_norm_x = []
+    plot_norm_y = []
+
     for edge in edges_convection:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
-        vector = coord[edge[1]-1] - coord[edge[0]-1]
-
+        #vector = coord[edge[1]-1] - coord[edge[0]-1]
         #Rotation 90 degrees clockwise and normalization to get the normal vector pointing outwards
-        normal_vector = np.array([vector[1], -vector[0]]) / np.linalg.norm(vector) 
+        #normal_vector = np.array([vector[1], -vector[0]]) / np.linalg.norm(vector) 
+        mid_point = (coord[edge[1]-1] + coord[edge[0]-1])/2
+
+        mid_y = mid_point[1]
+        
+        # There is problem with inconsistent orientation of nodes, so we need to check orientation manually.
+        # See which hole is closest
+        if mid_y < 0.013:   
+            center = np.array([0.004, 0.008]) # Hål 1
+        elif mid_y < 0.023: 
+            center = np.array([0.006, 0.018]) # Hål 2
+        elif mid_y < 0.033: 
+            center = np.array([0.004, 0.028]) # Hål 3
+        else:               
+            center = np.array([0.006, 0.038]) # Hål 4
+
+        # Normal vector is from midpoint to center
+        normal_vector = (center - mid_point)/np.linalg.norm(center - mid_point)
+        
+        plot_mid_x.append(mid_point[0])
+        plot_mid_y.append(mid_point[1])
+        plot_norm_x.append(normal_vector[0])
+        plot_norm_y.append(normal_vector[1])
 
         force_vec = -thickness*length*pc * normal_vector / 2 #Negative since it directed into the battery, divided by 2 because of linear shape functions
         F_1 = force_vec[0]
@@ -423,6 +449,30 @@ if __name__=="__main__":
     # Plor in MPa instead of Pa
     nodal_mises_MPa = nodal_mises / 1e6
 
+    # ==========================================
+    # VISUELL KONTROLL AV NORMALVEKTORER
+    # ==========================================
+    plt.figure(figsize=(6, 12))
+    
+    # Rita upp nätet i bakgrunden så vi ser var pilarna är
+    cfv.draw_mesh(
+        coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type, 
+        filled=False, color='lightgray'
+    )
+    
+    # RITA PILARNA! (quiver)
+    # X, Y (startpunkter) och U, V (riktning). 
+    # Ändra 'scale' om pilarna blir för långa/korta (högre siffra = kortare pilar)
+    plt.quiver(
+        plot_mid_x, plot_mid_y, plot_norm_x, plot_norm_y, 
+        color='red', scale=20, width=0.005, label='Normalvektorer'
+    )
+    
+    plt.title("Visuell kontroll av yt-normaler i kylkanaler")
+    plt.legend()
+    plt.axis('equal')
+    plt.show()
+
     plt.figure(figsize=(8, 10))
     
     cfv.draw_nodal_values_shaded(
@@ -431,7 +481,7 @@ if __name__=="__main__":
         edof=enod, 
         dofs_per_node=1, 
         el_type=el_type, 
-        title="Von Mises stress [MPa] for dynamic temperature distribution at time 420s"
+        title="Von Mises stress [MPa] for dynamic temperature distribution at 420s"
     )
 
     cfv.colorbar(label="Nodal von Mises stress (MPa)") 
