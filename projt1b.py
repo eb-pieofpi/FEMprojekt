@@ -48,8 +48,7 @@ k = 2 #Thermal conductivity
 
 thickness = 1 # meter 
 
-
-
+# Given
 def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
     """ Returns a list of edges given nodes
         Args :
@@ -194,6 +193,8 @@ if __name__=="__main__":
     #Conductivity matrix
     D = np.eye(2)*k
 
+    # Group edges by marker
+
     edges = nodesToEdges(bdofs, edof)
 
     edges_out = edges[MARKER_q_out]
@@ -209,15 +210,19 @@ if __name__=="__main__":
     #Stiffness matrix 
     K =  np.zeros((ndof,ndof))
 
+
+    # Assemble C matrix and stiffness matrix
     for i in range(nelem):
         #Assemble C matrix
-        Ce = plantml.plantml(ex[i,:], ey[i,:], rho*c_p*thickness)
+        Ce = plantml.plantml(ex[i,:], ey[i,:], rho*c_p*thickness) # Given funtion
         cfc.assem(edof[i], C, Ce)
 
         #Assemble K matrix
         Ke = cfc.flw2te(ex[i,:],ey[i,:],ep,D)
         cfc.assem(edof[i], K, Ke)
-        
+    
+    # Calculate convection contribution to load vector as well as the stiffness matrix contribution from convection
+    # Only the contributions that don't vary with time is calculated here
     for edge in edges_convection:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         F_convection[edge-1] += alpha_c * thickness * length * T_inf / 2 #
@@ -232,7 +237,7 @@ if __name__=="__main__":
 
     t = np.linspace(0, t_tot, n_steps) # Simulate for 10 minutes with 1000 time steps
 
-    delta_t = t[1] - t[0]
+    delta_t = t[1] - t[0] # Time step size
 
     # Initial temperature distribution
     T_n = np.ones((ndof, 1)) * T_inf
@@ -252,7 +257,7 @@ if __name__=="__main__":
         # Flow out vector
         F_out = np.zeros((ndof, 1))
 
-        # Note the load vector should be in time step n+1! 
+        # Note the load vector should be in time step n+1! Solved by beginning for loop at 1 and using time = t[step]
 
         # Calculate flow contribution to load vector
         for edge in edges_out:
@@ -287,6 +292,8 @@ if __name__=="__main__":
 
     # Max temp and convert to celcius
     max_temps = np.max(T_celsius, axis=0)
+
+    #Plotting
     
     plt.figure(figsize=(10, 5))
     plt.plot(t, max_temps, label="Maximum temperature in the battery", color='red')
@@ -295,7 +302,7 @@ if __name__=="__main__":
     plt.title("Maximum temperature in the battery over time")
     plt.grid(True)
     plt.legend()
-    plt.savefig("max_temperature_over_time.png")
+    #plt.savefig("max_temperature_over_time.png")
     plt.show()
 
     times_to_plot = [60, 180, 300, 420, 510, 600]
@@ -332,5 +339,5 @@ if __name__=="__main__":
         axes[i].ticklabel_format(useOffset=False, style='plain')
 
     plt.tight_layout()
-    plt.savefig("temperature_distribution_over_time.png")
+    #plt.savefig("temperature_distribution_over_time.png")
     plt.show()

@@ -42,7 +42,7 @@ k = 2 #Thermal conductivity
 
 thickness = 1 # meter 
 
-
+# Given
 def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
     """ Returns a list of edges given nodes
         Args :
@@ -64,6 +64,7 @@ def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
             
     return edges
 
+# Adapted from lab task 2
 def generate_mesh(show_geometry: bool):
     # initialize mesh
     g = cfg.geometry()
@@ -167,19 +168,19 @@ def generate_mesh(show_geometry: bool):
         plt.show()
 
 
+
     # Boundary Conditions
     bc, bc_value = np.array([], 'i'), np.array([], 'f')
 
+    # No dirichlet boundary conditions, only convection and flow out, which are handled in the assembly process
     # bc, bc_value = cfu.applybc(bdofs, bc, bc_value, MARKER_CONVECTION, T_inf)
 
-
-    
     return (coord, edof, dofs, bdofs, bc, bc_value, element_markers)
 
 if __name__=="__main__":
     coord, edof, dofs, bdofs, bc, bc_value, element_markers = generate_mesh(show_geometry=False)
 
-    ex,ey = cfc.coord_extract(edof,coord,dofs)
+    ex,ey = cfc.coord_extract(edof,coord,dofs) # Coordinates for each element
     ndof = np.size(dofs)
     nelem = len(edof)
     ep = [thickness]
@@ -210,7 +211,7 @@ if __name__=="__main__":
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         F_out[edge-1] -= q_out * length * thickness / 2 #Form function for flow out, negative since it's leaving the system, divided by 2 since it is a triangle and we have linear shape functions for the edges
 
-
+    # Calculate convection contribution to load vector as well as the stiffness matrix contribution from convection.
     for edge in edges_convection:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         F_convection[edge-1] += alpha_c * thickness * length * T_inf / 2 #
@@ -221,6 +222,7 @@ if __name__=="__main__":
         # Put into the global stiffness matrix
         cfc.assem(edge, K, Kc_e)
 
+    # Calculate element stiffness matrices and load vectors, and assemble into global K and F_l
     for i in range(nelem):
         Ke = cfc.flw2te(ex[i,:],ey[i,:],ep,D)
 
@@ -238,7 +240,9 @@ if __name__=="__main__":
 
     F_l += F_out + F_convection #Add flow contribution and convection to load vector
     
-    temps, flows = cfc.solveq(K, F_l, bc, bc_value)
+    temps, flows = cfc.solveq(K, F_l, bc, bc_value) # Solve system
+
+    # Visualization
 
     cfv.figure()
 

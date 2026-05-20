@@ -19,10 +19,10 @@ import calfem.vis_mpl as cfv
 
 import numpy as np
 
-import proj_temp_results_as_functions as temp_results
+import proj_temp_results_as_functions as temp_results # Temperatures from a and b part.
 
 # Mesh data
-el_sizef, el_type, dofs_pn = 0.02, 2, 2
+el_sizef, el_type, dofs_pn = 0.02, 2, 2 # 2 dofs per node for structural analysis (x and y displacements)!!!
 mesh_dir = "."
 
 # boundary markers
@@ -58,11 +58,13 @@ p0 = 1e8 # pressure for p1
 p2 = 1e7 # Pressure
 pc = 1e6 # Contact pressure
 
+# Calculate von Mises stress from stress components
 def vonMisesStress(sigma):
     sigma_xx, sigma_yy, sigma_zz, sigma_xy = sigma[0], sigma[1], sigma[2], sigma[3]
     von_mises = np.sqrt(((sigma_xx - sigma_yy)**2 + (sigma_yy - sigma_zz)**2 + (sigma_zz - sigma_xx)**2 + 6*sigma_xy**2) / 2)
     return von_mises
 
+# B function for plane stress elements, returns the B matrix and the area of the element
 def Bfunction(ex, ey):
     x1, x2, x3 = ex[0], ex[1], ex[2]
     y1, y2, y3 = ey[0], ey[1], ey[2]
@@ -83,6 +85,7 @@ def Bfunction(ex, ey):
 
     return B, A
 
+#Given
 def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
     """ Returns a list of edges given nodes
         Args :
@@ -104,6 +107,7 @@ def nodesToEdges ( nodes : dict , enod : np . array ) -> dict :
             
     return edges
 
+#Given
 def elmToNode ( eV : np . array , edof : np . array ) -> np . array :
     """ Estimates nodal values from element - based values
     Args :
@@ -129,7 +133,6 @@ def elmToNode ( eV : np . array , edof : np . array ) -> np . array :
         nV [ n ] /= ne
 
     return nV
-
 
 def generate_mesh(show_geometry: bool):
     # initialize mesh
@@ -237,6 +240,7 @@ def generate_mesh(show_geometry: bool):
     # Boundary Conditions
     bc, bc_value = np.array([], 'i'), np.array([], 'f')
 
+    # Locking the left edge in x and y direction
     for dof in bdofs[MARKER_SYMMETRY]:
         
         bc = np.append(bc, dof)
@@ -245,8 +249,6 @@ def generate_mesh(show_geometry: bool):
    
     # bc, bc_value = cfu.applybc(bdofs, bc, bc_value, MARKER_CONVECTION, T_inf)
 
-
-    
     return (coord, edof, dofs, bdofs, bc, bc_value, element_markers)
 
 if __name__=="__main__":
@@ -261,9 +263,9 @@ if __name__=="__main__":
     D = cfc.hooke(ptype, E, v)
 
     # We cant use bdofs and edof anymore since we need nodes and we have two dofs per node.
-    enod = (edof[:, 0::2] + 1) // 2
+    enod = (edof[:, 0::2] + 1) // 2 # Get node numbers from edof (integer division by 2 because of 2 dofs per node)
     bnodes = {}
-    for key, dof_list in bdofs.items():
+    for key, dof_list in bdofs.items(): # Same for boundary nodes
         bnodes[key] = np.unique((np.array(dof_list) + 1) // 2)
 
     # List of edges for each boundary condition
@@ -282,9 +284,10 @@ if __name__=="__main__":
 
     F_therm = np.zeros((ndof,1))
 
+    # Extract temperatures from previous tasks 
     T_tot, times = temp_results.get_T_dynamic()
     T_stat = T_tot[:,700]
-    #T_stat = temp_results.get_T_static()
+    #T_stat = temp_results.get_T_static() 
 
     for i in range(nelem):
         #Assemble K matrix
@@ -298,26 +301,26 @@ if __name__=="__main__":
         T_avg = np.mean(T_element)
         delta_T = T_avg - T_inf  
         
-        # Eftersom vi bygger B-matrisen i 2D måste vi baka in Poissons tal (1+v)
-        # för att simulera att z-riktningen är fastlåst (Plan töjning).
+        #Plane strain meaning the z expansion must happen in the x and y direction instead, using Poisson's number
         eps_0 = (1 + v) * alpha * delta_T * np.array([1, 1, 0])
         
-        # FIXEN: Tvätta bort CALFEMs gamla "np.matrix"-format!
+        # Make sure it is a numpy array
         D_clean = np.array(D)
         
-        # Klipp ut 3x3 från den RENA matrisen
+        # We don't want the z direction
         idx = [0, 1, 3]
         D_2D = D_clean[np.ix_(idx, idx)]
         
-        # Nu blir detta en perfekt 1D-vektor med 3 element
+        # Stress from thermal expansion, sigma_0 = D * eps_0
         sigma_0 = D_2D @ eps_0
+
 
         B, A = Bfunction(ex[i,:], ey[i,:])
 
-        # Nodkrafterna! f = A * t * B^T * sigma_0 (Använder @ för korrekt matris-matte)
+        # Integral
         f_therm_e = A * thickness * (B.T @ sigma_0)
         
-        # Montera in krafterna i totala lastvektorn!
+        # Put in the thermal load vector
         indx = edof[i] - 1
         F_therm[indx, 0] += f_therm_e
 
@@ -328,6 +331,7 @@ if __name__=="__main__":
     #Boundary  vector
     F_b = np.zeros((ndof,1))
 
+    # Pressure from bottom edge, contribution to load vector
     for edge in edges_p2:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
 
@@ -339,8 +343,9 @@ if __name__=="__main__":
 
         F_b[[y1_index, y2_index]] += p2 * thickness * length / 2 # Pressure times area (length*thickness) divided by 2 because of linear shape functions
 
-
+    # Formula for pressure on the right side, linear variation from p0 at the bottom to 0 at the top
     p1 = lambda y: (y/0.023-1)*p0
+
     for edge in edges_p1:
         length = np.linalg.norm(coord[edge[1]-1] - coord[edge[0]-1]) #length of edge
         
@@ -371,7 +376,7 @@ if __name__=="__main__":
         #Rotation 90 degrees clockwise and normalization to get the normal vector pointing outwards
         normal_vector = np.array([vector[1], -vector[0]]) / np.linalg.norm(vector) 
 
-        force_vec = -thickness*length*pc * normal_vector / 2
+        force_vec = -thickness*length*pc * normal_vector / 2 #Negative since it directed into the battery, divided by 2 because of linear shape functions
         F_1 = force_vec[0]
         F_2 = force_vec[1]
 
@@ -380,32 +385,42 @@ if __name__=="__main__":
         F_b[xindex] += F_1
         F_b[yindex] += F_2
 
-    F = F_b + F_therm
+    F = F_b + F_therm #Total load vector is the sum of the boundary loads and the thermal loads
 
+    # Solve system
     displacements, reactions = cfc.solveq(K, F, bc, bc_value)
 
-    mises_elements = np.zeros(nelem)
+    mises_elements = np.zeros(nelem) # initiate array to store von Mises stress for each element
 
+    # Calculate von Mises stress for each element using the displacements and the thermal expansion, and store in mises_elements
     for i in range(nelem):
+        # Extract temperature difference
         nod_index = enod[i] - 1
         T_element = T_stat[nod_index] 
         T_avg = np.mean(T_element)
         delta_T = T_avg - T_inf  
-        
+
+        # Displacements for the element
         displacements_element = displacements[edof[i]-1]
         B,A = Bfunction(ex[i,:], ey[i,:])
 
+        # Calculate the total strain from the displacements, epsilon = B * displacements
         epsilon_almost_fucking_tot = np.matmul(B, displacements_element).flatten()
+        # Must be a 4 component vector to be able to subtract the thermal expansion, we just add a 0 for the z component since we are in plane stress
         epsilon_fucking_tot = np.array([epsilon_almost_fucking_tot[0], epsilon_almost_fucking_tot[1], 0, epsilon_almost_fucking_tot[2]])
 
+        # Substract thermal expansion to get the elastic strain
         epsilon_elastic = epsilon_fucking_tot - alpha * delta_T * np.array([1, 1, 1, 0])
 
+        #Hookes law
         sigma_e = D @ epsilon_elastic
 
         mises_elements[i] = vonMisesStress(sigma_e.flatten())
 
+    # Get nodal von Mises stress by averaging the element von Mises stresses for the elements that share each node
     nodal_mises = elmToNode(mises_elements, enod)
 
+    # Plor in MPa instead of Pa
     nodal_mises_MPa = nodal_mises / 1e6
 
     plt.figure(figsize=(8, 10))
@@ -425,24 +440,18 @@ if __name__=="__main__":
     #plt.savefig("dynamic_von_mises_stress_distribution.png")
     plt.show()
 
-    print(max(nodal_mises_MPa))
-
-    # ==========================================
-    # PLOTTA FÖRSKJUTNINGAR
-    # ==========================================
+    # Plot displacements, magnified to be visible
     
-    # Skalfaktor: Gör förskjutningen 100 ggr större så vi ser den tydligt
+    # Scaling factor for displacements to make them visible in the plot
     mag_factor = 100.0 
 
     plt.figure(figsize=(8, 10))
     
-    # Rita först det o-deformerade nätet svagt i bakgrunden (grått)
     cfv.draw_mesh(
         coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type, 
         filled=False, color='lightgray'
     )
     
-    # Rita den deformerade geometrin i rött
     cfv.draw_displacements(
         a=displacements, coords=coord, edof=edof, dofs_per_node=dofs_pn, el_type=el_type,
         draw_undisplaced_mesh=False, title=f"Displacements static temperature (scaling factor: {mag_factor}x)",
